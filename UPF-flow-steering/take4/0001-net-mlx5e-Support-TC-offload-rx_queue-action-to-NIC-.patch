@@ -1,0 +1,138 @@
+From 0e0f98f56e91ff273d852bdb0c0b3826612b29c2 Mon Sep 17 00:00:00 2001
+From: Alexandre Cassen <acassen@corp.free.fr>
+Date: Wed, 25 Mar 2026 10:29:56 +0100
+Subject: [PATCH 1/2] net/mlx5e: Support TC offload rx_queue action to NIC flow
+
+Add TC offload support for FLOW_ACTION_RX_QUEUE_MAPPING in NIC mode.
+A new act handler (rx_queue.c) validates the queue index against the
+number of channels and resolves it to the corresponding direct TIR,
+which is then used as the flow rule destination.
+
+Signed-off-by: Alexandre Cassen <acassen@corp.free.fr>
+---
+ .../net/ethernet/mellanox/mlx5/core/Makefile  |  3 +-
+ .../mellanox/mlx5/core/en/tc/act/act.c        |  1 +
+ .../mellanox/mlx5/core/en/tc/act/act.h        |  1 +
+ .../mellanox/mlx5/core/en/tc/act/rx_queue.c   | 43 +++++++++++++++++++
+ .../net/ethernet/mellanox/mlx5/core/en_tc.c   |  4 ++
+ .../net/ethernet/mellanox/mlx5/core/en_tc.h   |  1 +
+ 6 files changed, 52 insertions(+), 1 deletion(-)
+ create mode 100644 drivers/net/ethernet/mellanox/mlx5/core/en/tc/act/rx_queue.c
+
+diff --git a/drivers/net/ethernet/mellanox/mlx5/core/Makefile b/drivers/net/ethernet/mellanox/mlx5/core/Makefile
+index 8ffa286a18f5..f34f0ac8f29f 100644
+--- a/drivers/net/ethernet/mellanox/mlx5/core/Makefile
++++ b/drivers/net/ethernet/mellanox/mlx5/core/Makefile
+@@ -55,7 +55,8 @@ mlx5_core-$(CONFIG_MLX5_CLS_ACT)     += en/tc/act/act.o en/tc/act/drop.o en/tc/a
+ 					en/tc/act/vlan.o en/tc/act/vlan_mangle.o en/tc/act/mpls.o \
+ 					en/tc/act/mirred.o en/tc/act/mirred_nic.o \
+ 					en/tc/act/ct.o en/tc/act/sample.o en/tc/act/ptype.o \
+-					en/tc/act/redirect_ingress.o en/tc/act/police.o
++					en/tc/act/redirect_ingress.o en/tc/act/police.o \
++					en/tc/act/rx_queue.o
+ 
+ ifneq ($(CONFIG_MLX5_TC_CT),)
+ 	mlx5_core-y			     += en/tc_ct.o en/tc/ct_fs_dmfs.o
+diff --git a/drivers/net/ethernet/mellanox/mlx5/core/en/tc/act/act.c b/drivers/net/ethernet/mellanox/mlx5/core/en/tc/act/act.c
+index 0380a04c3691..9b5d7d5ee271 100644
+--- a/drivers/net/ethernet/mellanox/mlx5/core/en/tc/act/act.c
++++ b/drivers/net/ethernet/mellanox/mlx5/core/en/tc/act/act.c
+@@ -41,6 +41,7 @@ static struct mlx5e_tc_act *tc_acts_nic[NUM_FLOW_ACTIONS] = {
+ 	[FLOW_ACTION_ADD] = &mlx5e_tc_act_pedit,
+ 	[FLOW_ACTION_CSUM] = &mlx5e_tc_act_csum,
+ 	[FLOW_ACTION_MARK] = &mlx5e_tc_act_mark,
++	[FLOW_ACTION_RX_QUEUE_MAPPING] = &mlx5e_tc_act_rx_queue,
+ 	[FLOW_ACTION_CT] = &mlx5e_tc_act_ct,
+ };
+ 
+diff --git a/drivers/net/ethernet/mellanox/mlx5/core/en/tc/act/act.h b/drivers/net/ethernet/mellanox/mlx5/core/en/tc/act/act.h
+index 2e528b2c34d6..e6df5f0f27a7 100644
+--- a/drivers/net/ethernet/mellanox/mlx5/core/en/tc/act/act.h
++++ b/drivers/net/ethernet/mellanox/mlx5/core/en/tc/act/act.h
+@@ -94,6 +94,7 @@ extern struct mlx5e_tc_act mlx5e_tc_act_sample;
+ extern struct mlx5e_tc_act mlx5e_tc_act_ptype;
+ extern struct mlx5e_tc_act mlx5e_tc_act_redirect_ingress;
+ extern struct mlx5e_tc_act mlx5e_tc_act_police;
++extern struct mlx5e_tc_act mlx5e_tc_act_rx_queue;
+ 
+ struct mlx5e_tc_act *
+ mlx5e_tc_act_get(enum flow_action_id act_id,
+diff --git a/drivers/net/ethernet/mellanox/mlx5/core/en/tc/act/rx_queue.c b/drivers/net/ethernet/mellanox/mlx5/core/en/tc/act/rx_queue.c
+new file mode 100644
+index 000000000000..83add2141080
+--- /dev/null
++++ b/drivers/net/ethernet/mellanox/mlx5/core/en/tc/act/rx_queue.c
+@@ -0,0 +1,43 @@
++// SPDX-License-Identifier: GPL-2.0 OR Linux-OpenIB
++// Copyright (c) 2024, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
++
++#include "act.h"
++#include "en/tc_priv.h"
++#include "en/rx_res.h"
++
++static bool
++tc_act_can_offload_rx_queue(struct mlx5e_tc_act_parse_state *parse_state,
++			    const struct flow_action_entry *act,
++			    int act_index,
++			    struct mlx5_flow_attr *attr)
++{
++	struct mlx5e_priv *priv = parse_state->flow->priv;
++	u16 queue = act->rx_queue;
++
++	if (queue >= priv->channels.params.num_channels) {
++		NL_SET_ERR_MSG_MOD(parse_state->extack,
++				   "RX queue index out of range");
++		return false;
++	}
++
++	return true;
++}
++
++static int
++tc_act_parse_rx_queue(struct mlx5e_tc_act_parse_state *parse_state,
++		      const struct flow_action_entry *act,
++		      struct mlx5e_priv *priv,
++		      struct mlx5_flow_attr *attr)
++{
++	attr->nic_attr->rx_tirn = mlx5e_rx_res_get_tirn_direct(priv->rx_res,
++							       act->rx_queue);
++	attr->action |= MLX5_FLOW_CONTEXT_ACTION_FWD_DEST;
++
++	return 0;
++}
++
++struct mlx5e_tc_act mlx5e_tc_act_rx_queue = {
++	.can_offload		= tc_act_can_offload_rx_queue,
++	.parse_action		= tc_act_parse_rx_queue,
++	.is_terminating_action	= true,
++};
+diff --git a/drivers/net/ethernet/mellanox/mlx5/core/en_tc.c b/drivers/net/ethernet/mellanox/mlx5/core/en_tc.c
+index 1434b65d4746..8838ea2f0f31 100644
+--- a/drivers/net/ethernet/mellanox/mlx5/core/en_tc.c
++++ b/drivers/net/ethernet/mellanox/mlx5/core/en_tc.c
+@@ -1266,6 +1266,10 @@ mlx5e_add_offloaded_nic_rule(struct mlx5e_priv *priv,
+ 		dest[dest_ix].type = MLX5_FLOW_DESTINATION_TYPE_TIR;
+ 		dest[dest_ix].tir_num = nic_attr->hairpin_tirn;
+ 		dest_ix++;
++	} else if (nic_attr->rx_tirn) {
++		dest[dest_ix].type = MLX5_FLOW_DESTINATION_TYPE_TIR;
++		dest[dest_ix].tir_num = nic_attr->rx_tirn;
++		dest_ix++;
+ 	} else if (attr->action & MLX5_FLOW_CONTEXT_ACTION_FWD_DEST) {
+ 		dest[dest_ix].type = MLX5_FLOW_DESTINATION_TYPE_FLOW_TABLE;
+ 		if (attr->dest_chain) {
+diff --git a/drivers/net/ethernet/mellanox/mlx5/core/en_tc.h b/drivers/net/ethernet/mellanox/mlx5/core/en_tc.h
+index e1b8cb78369f..254ea76fcbe9 100644
+--- a/drivers/net/ethernet/mellanox/mlx5/core/en_tc.h
++++ b/drivers/net/ethernet/mellanox/mlx5/core/en_tc.h
+@@ -66,6 +66,7 @@ struct mlx5e_tc_update_priv {
+ struct mlx5_nic_flow_attr {
+ 	u32 flow_tag;
+ 	u32 hairpin_tirn;
++	u32 rx_tirn;
+ 	struct mlx5_flow_table *hairpin_ft;
+ };
+ 
+-- 
+2.47.3
+

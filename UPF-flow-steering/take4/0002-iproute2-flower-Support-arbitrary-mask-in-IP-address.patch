@@ -1,0 +1,79 @@
+From 6afc8a6437cbc262c1c37cc1908fb54ff1ffe89e Mon Sep 17 00:00:00 2001
+From: Alexandre Cassen <acassen@corp.free.fr>
+Date: Wed, 25 Mar 2026 11:07:27 +0100
+Subject: [PATCH 2/2] flower: Support arbitrary mask in IP address
+
+Allow specifying a full address mask instead of a prefix length
+for IP address keys, e.g.:
+  src_ip 192.168.1.0/255.255.255.0
+  src_ip6 2001:db8::/ffff:ffff::
+
+Signed-off-by: Alexandre Cassen <acassen@corp.free.fr>
+---
+ tc/f_flower.c | 46 +++++++++++++++++++++++++++++++++++++++++++++-
+ 1 file changed, 45 insertions(+), 1 deletion(-)
+
+diff --git a/tc/f_flower.c b/tc/f_flower.c
+index 55b6da8d..5cf04097 100644
+--- a/tc/f_flower.c
++++ b/tc/f_flower.c
+@@ -479,11 +479,55 @@ static int __flower_parse_ip_addr(char *str, int family,
+ 				  int addr6_type, int mask6_type,
+ 				  struct nlmsghdr *n)
+ {
+-	int ret;
+ 	inet_prefix addr;
++	char *slash;
+ 	int bits;
++	int ret;
+ 	int i;
+ 
++	/* If the mask part contains ':' or '.' it is a full address mask,
++	 * not a prefix length — parse and use it directly.
++	 */
++	slash = strchr(str, '/');
++	if (slash && (strchr(slash + 1, ':') || strchr(slash + 1, '.'))) {
++		char *mask_str = slash + 1;
++		int af;
++
++		*slash = '\0';
++		ret = get_prefix(&addr, str, family);
++		*slash = '/';
++		if (ret)
++			return -1;
++
++		af = addr.family;
++		if (af != AF_INET && af != AF_INET6) {
++			fprintf(stderr, "Arbitrary mask unsupported for this address family\n");
++			return -1;
++		}
++
++		if (strchr(mask_str, ':') && af != AF_INET6) {
++			fprintf(stderr, "IPv6 mask specified for non-IPv6 address\n");
++			return -1;
++		}
++		if (strchr(mask_str, '.') && af != AF_INET) {
++			fprintf(stderr, "IPv4 mask specified for non-IPv4 address\n");
++			return -1;
++		}
++
++		addattr_l(n, MAX_MSG, af == AF_INET ? addr4_type : addr6_type,
++			  addr.data, addr.bytelen);
++
++		memset(addr.data, 0, sizeof(addr.data));
++		if (inet_pton(af, mask_str, addr.data) != 1) {
++			fprintf(stderr, "Invalid address mask \"%s\"\n", mask_str);
++			return -1;
++		}
++
++		addattr_l(n, MAX_MSG, af == AF_INET ? mask4_type : mask6_type,
++			  addr.data, addr.bytelen);
++		return 0;
++	}
++
+ 	ret = get_prefix(&addr, str, family);
+ 	if (ret)
+ 		return -1;
+-- 
+2.47.3
+

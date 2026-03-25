@@ -1,0 +1,37 @@
+$ sudo ./xdp-rss-mon -i p0
+XDP program 'xdp_rss' attached to interface 'p0' (ifindex 5)
+RSS activity monitoring... (Ctrl-C to stop)
+          <idle>-0       [000] ..s2.   287.047033: bpf_trace_printk: xdp_rss: GTP-U/IPv4 rx_queue=0 teid=0x00000001
+          <idle>-0       [001] ..s2.   287.376032: bpf_trace_printk: xdp_rss: GTP-U/IPv4 rx_queue=1 teid=0x20000000
+          <idle>-0       [002] ..s2.   287.706022: bpf_trace_printk: xdp_rss: GTP-U/IPv4 rx_queue=2 teid=0x40000000
+          <idle>-0       [003] ..s2.   288.032022: bpf_trace_printk: xdp_rss: GTP-U/IPv4 rx_queue=3 teid=0x60000000
+          <idle>-0       [004] ..s2.   288.358027: bpf_trace_printk: xdp_rss: GTP-U/IPv4 rx_queue=4 teid=0x80000000
+          <idle>-0       [005] ..s2.   288.685028: bpf_trace_printk: xdp_rss: GTP-U/IPv4 rx_queue=5 teid=0xa0000000
+          <idle>-0       [006] ..s2.   289.013029: bpf_trace_printk: xdp_rss: GTP-U/IPv4 rx_queue=6 teid=0xc0000000
+          <idle>-0       [007] ..s2.   289.342032: bpf_trace_printk: xdp_rss: GTP-U/IPv4 rx_queue=7 teid=0xe0000000
+          <idle>-0       [000] ..s2.   289.673094: bpf_trace_printk: xdp_rss: GTP-U/IPv6 rx_queue=0 teid=0x00000001
+          <idle>-0       [001] ..s2.   289.999081: bpf_trace_printk: xdp_rss: GTP-U/IPv6 rx_queue=1 teid=0x20000000
+          <idle>-0       [002] ..s2.   290.324082: bpf_trace_printk: xdp_rss: GTP-U/IPv6 rx_queue=2 teid=0x40000000
+          <idle>-0       [003] ..s2.   290.650084: bpf_trace_printk: xdp_rss: GTP-U/IPv6 rx_queue=3 teid=0x60000000
+          <idle>-0       [004] ..s2.   290.976093: bpf_trace_printk: xdp_rss: GTP-U/IPv6 rx_queue=4 teid=0x80000000
+          <idle>-0       [005] ..s2.   291.306084: bpf_trace_printk: xdp_rss: GTP-U/IPv6 rx_queue=5 teid=0xa0000000
+          <idle>-0       [006] ..s2.   291.636081: bpf_trace_printk: xdp_rss: GTP-U/IPv6 rx_queue=6 teid=0xc0000000
+          <idle>-0       [007] ..s2.   291.963090: bpf_trace_printk: xdp_rss: GTP-U/IPv6 rx_queue=7 teid=0xe0000000
+          <idle>-0       [000] ..s2.   292.295951: bpf_trace_printk: xdp_rss: IPv4 rx_queue=0 dst=0a000000
+          <idle>-0       [001] ..s2.   292.627951: bpf_trace_printk: xdp_rss: IPv4 rx_queue=1 dst=0a200000
+          <idle>-0       [002] ..s2.   292.954952: bpf_trace_printk: xdp_rss: IPv4 rx_queue=2 dst=0a400000
+          <idle>-0       [003] ..s2.   293.281953: bpf_trace_printk: xdp_rss: IPv4 rx_queue=3 dst=0a600000
+          <idle>-0       [004] ..s2.   293.607950: bpf_trace_printk: xdp_rss: IPv4 rx_queue=4 dst=0a800000
+          <idle>-0       [005] ..s2.   293.933958: bpf_trace_printk: xdp_rss: IPv4 rx_queue=5 dst=0aa00000
+          <idle>-0       [006] ..s2.   294.261967: bpf_trace_printk: xdp_rss: IPv4 rx_queue=6 dst=0ac00000
+          <idle>-0       [007] ..s2.   294.593948: bpf_trace_printk: xdp_rss: IPv4 rx_queue=7 dst=0ae00000
+          <idle>-0       [000] ..s2.   294.921019: bpf_trace_printk: xdp_rss: IPv6 rx_queue=0 dst=20010db8000000000000000000000000
+          <idle>-0       [001] ..s2.   295.245024: bpf_trace_printk: xdp_rss: IPv6 rx_queue=1 dst=20010db8000080000000000000000000
+          <idle>-0       [002] ..s2.   295.578022: bpf_trace_printk: xdp_rss: IPv6 rx_queue=2 dst=20010db8000100000000000000000000
+          <idle>-0       [003] ..s2.   295.905022: bpf_trace_printk: xdp_rss: IPv6 rx_queue=3 dst=20010db8000180000000000000000000
+          <idle>-0       [004] ..s2.   296.230020: bpf_trace_printk: xdp_rss: IPv6 rx_queue=4 dst=20010db8000200000000000000000000
+          <idle>-0       [005] ..s2.   296.557020: bpf_trace_printk: xdp_rss: IPv6 rx_queue=5 dst=20010db8000280000000000000000000
+          <idle>-0       [006] ..s2.   296.883025: bpf_trace_printk: xdp_rss: IPv6 rx_queue=6 dst=20010db8000300000000000000000000
+          <idle>-0       [007] ..s2.   297.210026: bpf_trace_printk: xdp_rss: IPv6 rx_queue=7 dst=20010db8000380000000000000000000
+
+Detaching XDP program from 'p0'...

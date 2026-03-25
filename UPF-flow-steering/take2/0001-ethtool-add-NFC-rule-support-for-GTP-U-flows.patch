@@ -1,0 +1,185 @@
+From 627f6661f2f77a80bfccb50be88bebb14933550d Mon Sep 17 00:00:00 2001
+From: Alexandre Cassen <acassen@corp.free.fr>
+Date: Wed, 25 Mar 2026 09:21:21 +0100
+Subject: [PATCH] ethtool: add NFC rule support for GTP-U flows
+
+Add GTPU_V4_FLOW and GTPU_V6_FLOW to the NFC flow classifier,
+allowing users to steer GTP-U traffic by TEID via -N/--config-nfc.
+
+Handle TEID mask encoding by storing the mask as-is (not bit-inverted)
+since the kernel expects a positive mask for TEID.
+
+Extend rxclass_print_nfc_rule() to display GTP-U rules.
+
+Signed-off-by: Alexandre Cassen <acassen@corp.free.fr>
+---
+ rxclass.c            | 58 +++++++++++++++++++++++++++++++++++++++++++-
+ uapi/linux/ethtool.h | 20 +++++++++++++--
+ 2 files changed, 75 insertions(+), 3 deletions(-)
+
+diff --git a/rxclass.c b/rxclass.c
+index 1e202cc..aed21ca 100644
+--- a/rxclass.c
++++ b/rxclass.c
+@@ -219,6 +219,15 @@ static void rxclass_print_nfc_rule(struct ethtool_rx_flow_spec *fsp,
+ 			ntohl(fsp->h_u.usr_ip6_spec.l4_4_bytes),
+ 			ntohl(fsp->m_u.usr_ip6_spec.l4_4_bytes));
+ 		break;
++	case GTPU_V4_FLOW:
++	case GTPU_V6_FLOW:
++		fprintf(stdout, "\tRule Type: GTP-U over %s\n",
++			flow_type == GTPU_V4_FLOW ? "IPv4" : "IPv6");
++		fprintf(stdout,
++			"\tTEID: 0x%08x mask: 0x%08x\n",
++			ntohl(fsp->h_u.gtpu_spec.teid),
++			~ntohl(fsp->m_u.gtpu_spec.teid));
++		break;
+ 	case ETHER_FLOW:
+ 		dmac = fsp->h_u.ether_spec.h_dest;
+ 		dmacm = fsp->m_u.ether_spec.h_dest;
+@@ -296,6 +305,8 @@ static void rxclass_print_rule(struct ethtool_rx_flow_spec *fsp,
+ 	case ESP_V6_FLOW:
+ 	case IPV6_USER_FLOW:
+ 	case ETHER_FLOW:
++	case GTPU_V4_FLOW:
++	case GTPU_V6_FLOW:
+ 		rxclass_print_nfc_rule(fsp, rss_context);
+ 		break;
+ 	case IPV4_USER_FLOW:
+@@ -652,6 +663,7 @@ typedef enum {
+ #define NFC_FLAG_MAC_ADDR	0x0800
+ #define NFC_FLAG_RING_VF	0x1000
+ #define NFC_FLAG_RING_QUEUE	0x2000
++#define NFC_FLAG_TEID		0x4000
+ 
+ struct rule_opts {
+ 	const char	*name;
+@@ -901,6 +913,34 @@ static const struct rule_opts rule_nfc_usr_ip6[] = {
+ 	  offsetof(struct ethtool_rx_flow_spec, m_ext.h_dest) },
+ };
+ 
++static const struct rule_opts rule_nfc_gtpu4[] = {
++	{ "teid", OPT_BE32, NFC_FLAG_TEID,
++	  offsetof(struct ethtool_rx_flow_spec, h_u.gtpu_spec.teid),
++	  offsetof(struct ethtool_rx_flow_spec, m_u.gtpu_spec.teid) },
++	{ "action", OPT_U64, NFC_FLAG_RING,
++	  offsetof(struct ethtool_rx_flow_spec, ring_cookie), -1 },
++	{ "vf", OPT_RING_VF, NFC_FLAG_RING_VF,
++	  offsetof(struct ethtool_rx_flow_spec, ring_cookie), -1 },
++	{ "queue", OPT_RING_QUEUE, NFC_FLAG_RING_QUEUE,
++	  offsetof(struct ethtool_rx_flow_spec, ring_cookie), -1 },
++	{ "loc", OPT_U32, NFC_FLAG_LOC,
++	  offsetof(struct ethtool_rx_flow_spec, location), -1 },
++};
++
++static const struct rule_opts rule_nfc_gtpu6[] = {
++	{ "teid", OPT_BE32, NFC_FLAG_TEID,
++	  offsetof(struct ethtool_rx_flow_spec, h_u.gtpu_spec.teid),
++	  offsetof(struct ethtool_rx_flow_spec, m_u.gtpu_spec.teid) },
++	{ "action", OPT_U64, NFC_FLAG_RING,
++	  offsetof(struct ethtool_rx_flow_spec, ring_cookie), -1 },
++	{ "vf", OPT_RING_VF, NFC_FLAG_RING_VF,
++	  offsetof(struct ethtool_rx_flow_spec, ring_cookie), -1 },
++	{ "queue", OPT_RING_QUEUE, NFC_FLAG_RING_QUEUE,
++	  offsetof(struct ethtool_rx_flow_spec, ring_cookie), -1 },
++	{ "loc", OPT_U32, NFC_FLAG_LOC,
++	  offsetof(struct ethtool_rx_flow_spec, location), -1 },
++};
++
+ static const struct rule_opts rule_nfc_ether[] = {
+ 	{ "src", OPT_MAC, NFC_FLAG_SADDR,
+ 	  offsetof(struct ethtool_rx_flow_spec, h_u.ether_spec.h_source),
+@@ -1101,6 +1141,7 @@ static int rxclass_get_val(char *str, unsigned char *p, u32 *flags,
+ 		err = rxclass_get_ulong(str, &val, 32);
+ 		if (err)
+ 			return -1;
++
+ 		*(__be32 *)&p[opt->offset] = htonl((u32)val);
+ 		if (opt->moffset >= 0)
+ 			*(__be32 *)&p[opt->moffset] = (__be32)mask;
+@@ -1216,7 +1257,10 @@ static int rxclass_get_mask(char *str, unsigned char *p,
+ 		err = rxclass_get_ulong(str, &val, 32);
+ 		if (err)
+ 			return -1;
+-		*(__be32 *)&p[opt->moffset] = ~htonl((u32)val);
++		if (opt->flag == NFC_FLAG_TEID)
++			*(__be32 *)&p[opt->moffset] = htonl((u32)val);
++		else
++			*(__be32 *)&p[opt->moffset] = ~htonl((u32)val);
+ 		break;
+ 	}
+ 	case OPT_BE64: {
+@@ -1307,6 +1351,10 @@ int rxclass_parse_ruleopts(struct cmd_context *ctx,
+ 		flow_type = IPV6_USER_FLOW;
+ 	else if (!strcmp(argp[0], "ether"))
+ 		flow_type = ETHER_FLOW;
++	else if (!strcmp(argp[0], "gtpu4"))
++		flow_type = GTPU_V4_FLOW;
++	else if (!strcmp(argp[0], "gtpu6"))
++		flow_type = GTPU_V6_FLOW;
+ 	else
+ 		goto syntax_err;
+ 
+@@ -1345,6 +1393,14 @@ int rxclass_parse_ruleopts(struct cmd_context *ctx,
+ 		options = rule_nfc_ether;
+ 		n_opts = ARRAY_SIZE(rule_nfc_ether);
+ 		break;
++	case GTPU_V4_FLOW:
++		options = rule_nfc_gtpu4;
++		n_opts = ARRAY_SIZE(rule_nfc_gtpu4);
++		break;
++	case GTPU_V6_FLOW:
++		options = rule_nfc_gtpu6;
++		n_opts = ARRAY_SIZE(rule_nfc_gtpu6);
++		break;
+ 	default:
+ 		fprintf(stderr, "Add rule, invalid rule type[%s]\n", argp[0]);
+ 		return -1;
+diff --git a/uapi/linux/ethtool.h b/uapi/linux/ethtool.h
+index 7a13192..4e9a238 100644
+--- a/uapi/linux/ethtool.h
++++ b/uapi/linux/ethtool.h
+@@ -1348,6 +1348,21 @@ struct ethtool_usrip6_spec {
+ 	__u8    l4_proto;
+ };
+ 
++/**
++ * struct ethtool_gtpu_spec - flow specification for GTP-U
++ * @teid: GTP-U Tunnel Endpoint Identifier (network byte order)
++ * @padding: reserved, must be zero
++ *
++ * Used with %GTPU_V4_FLOW and %GTPU_V6_FLOW.  The outer IP version
++ * and UDP destination port (2152) are implied by the flow type; only
++ * the TEID needs to be supplied here.  Mask the TEID via the
++ * corresponding @m_u.gtpu_spec.teid field to match a contiguous range.
++ */
++struct ethtool_gtpu_spec {
++	__be32	teid;
++	__u8	padding[4];
++};
++
+ union ethtool_flow_union {
+ 	struct ethtool_tcpip4_spec		tcp_ip4_spec;
+ 	struct ethtool_tcpip4_spec		udp_ip4_spec;
+@@ -1361,6 +1376,7 @@ union ethtool_flow_union {
+ 	struct ethtool_ah_espip6_spec		ah_ip6_spec;
+ 	struct ethtool_ah_espip6_spec		esp_ip6_spec;
+ 	struct ethtool_usrip6_spec		usr_ip6_spec;
++	struct ethtool_gtpu_spec		gtpu_spec;
+ 	struct ethhdr				ether_spec;
+ 	__u8					hdata[52];
+ };
+@@ -2340,8 +2356,8 @@ enum {
+ 	 * elements such as TEID and GTP version.
+ 	 * It is primarily intended for data communication of the UE.
+ 	 */
+-	GTPU_V4_FLOW	= 0x13,	/* hash only */
+-	GTPU_V6_FLOW	= 0x14,	/* hash only */
++	GTPU_V4_FLOW	= 0x13,	/* hash or spec (gtpu_spec) */
++	GTPU_V6_FLOW	= 0x14,	/* hash or spec (gtpu_spec) */
+ 
+ 	/* Use for GTP-C IPv4 and v6.
+ 	 * The format of these GTP packets does not include TEID.
+-- 
+2.47.3
+

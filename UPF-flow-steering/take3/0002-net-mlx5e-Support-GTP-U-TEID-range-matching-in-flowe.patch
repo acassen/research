@@ -1,0 +1,143 @@
+From 11768b90f23d23b2da923336cab9b7f1cd40f0e6 Mon Sep 17 00:00:00 2001
+From: Alexandre Cassen <acassen@corp.free.fr>
+Date: Wed, 25 Mar 2026 10:37:00 +0100
+Subject: [PATCH 2/2] net/mlx5e: Support GTP-U TEID range matching in flower
+ via enc_opts
+
+Extend the flower GTP enc_opts to carry a TEID field for range-based
+steering.
+
+Add TCA_FLOWER_KEY_ENC_OPT_GTP_TEID to the GTP options nest. Add TEID
+field to the struct gtp_pdu_session_info.
+
+Extend __parse_cls_flower() for NIC-mode so that when ENC_OPTS carries
+a GTP TEID mask it programs fte_match_set_misc3.gtpu_teid via the flex
+parser (MLX5_FLEX_PARSER_GTPU_TEID_ENABLED).
+
+Signed-off-by: Alexandre Cassen <acassen@corp.free.fr>
+---
+ .../net/ethernet/mellanox/mlx5/core/en_tc.c   | 26 +++++++++++++++++++
+ include/net/gtp.h                             |  1 +
+ include/uapi/linux/pkt_cls.h                  |  1 +
+ net/sched/cls_flower.c                        | 15 ++++++++---
+ 4 files changed, 40 insertions(+), 3 deletions(-)
+
+diff --git a/drivers/net/ethernet/mellanox/mlx5/core/en_tc.c b/drivers/net/ethernet/mellanox/mlx5/core/en_tc.c
+index 8838ea2f0f31..675629d71c58 100644
+--- a/drivers/net/ethernet/mellanox/mlx5/core/en_tc.c
++++ b/drivers/net/ethernet/mellanox/mlx5/core/en_tc.c
+@@ -44,6 +44,7 @@
+ #include <net/bareudp.h>
+ #include <net/bonding.h>
+ #include <net/dst_metadata.h>
++#include <net/gtp.h>
+ #include "devlink.h"
+ #include "en.h"
+ #include "en/tc/post_act.h"
+@@ -3152,6 +3153,31 @@ static int __parse_cls_flower(struct mlx5e_priv *priv,
+ 		return -EOPNOTSUPP;
+ 	}
+ 
++	if (!mlx5e_is_eswitch_flow(flow) &&
++	    flow_rule_match_key(rule, FLOW_DISSECTOR_KEY_ENC_OPTS)) {
++		struct gtp_pdu_session_info *sinfo_key, *sinfo_mask;
++		struct flow_match_enc_opts enc_opts;
++
++		flow_rule_match_enc_opts(rule, &enc_opts);
++		if (enc_opts.key->dst_opt_type == IP_TUNNEL_GTP_OPT_BIT) {
++			sinfo_key = (struct gtp_pdu_session_info *)enc_opts.key->data;
++			sinfo_mask = (struct gtp_pdu_session_info *)enc_opts.mask->data;
++			if (sinfo_mask->teid) {
++				if (!(MLX5_CAP_GEN(priv->mdev, flex_parser_protocols) &
++				      MLX5_FLEX_PARSER_GTPU_TEID_ENABLED)) {
++					NL_SET_ERR_MSG_MOD(extack,
++							   "GTP-U TEID matching not supported");
++					return -EOPNOTSUPP;
++				}
++				MLX5_SET(fte_match_set_misc3, misc_c_3, gtpu_teid,
++					 be32_to_cpu(sinfo_mask->teid));
++				MLX5_SET(fte_match_set_misc3, misc_v_3, gtpu_teid,
++					 be32_to_cpu(sinfo_key->teid));
++				spec->match_criteria_enable |= MLX5_MATCH_MISC_PARAMETERS_3;
++			}
++		}
++	}
++
+ 	return 0;
+ }
+ 
+diff --git a/include/net/gtp.h b/include/net/gtp.h
+index c0253c8702d0..bac555e00716 100644
+--- a/include/net/gtp.h
++++ b/include/net/gtp.h
+@@ -65,6 +65,7 @@ struct gtp1u_packet {
+ struct gtp_pdu_session_info {	/* According to 3GPP TS 38.415. */
+ 	u8	pdu_type;
+ 	u8	qfi;
++	__be32	teid;
+ };
+ 
+ static inline bool netif_is_gtp(const struct net_device *dev)
+diff --git a/include/uapi/linux/pkt_cls.h b/include/uapi/linux/pkt_cls.h
+index 28d94b11d1aa..d121f396e5e0 100644
+--- a/include/uapi/linux/pkt_cls.h
++++ b/include/uapi/linux/pkt_cls.h
+@@ -639,6 +639,7 @@ enum {
+ 	TCA_FLOWER_KEY_ENC_OPT_GTP_UNSPEC,
+ 	TCA_FLOWER_KEY_ENC_OPT_GTP_PDU_TYPE,		/* u8 */
+ 	TCA_FLOWER_KEY_ENC_OPT_GTP_QFI,			/* u8 */
++	TCA_FLOWER_KEY_ENC_OPT_GTP_TEID,		/* be32 */
+ 
+ 	__TCA_FLOWER_KEY_ENC_OPT_GTP_MAX,
+ };
+diff --git a/net/sched/cls_flower.c b/net/sched/cls_flower.c
+index 26070c892305..978717ad8e7e 100644
+--- a/net/sched/cls_flower.c
++++ b/net/sched/cls_flower.c
+@@ -786,6 +786,7 @@ static const struct nla_policy
+ gtp_opt_policy[TCA_FLOWER_KEY_ENC_OPT_GTP_MAX + 1] = {
+ 	[TCA_FLOWER_KEY_ENC_OPT_GTP_PDU_TYPE]	   = { .type = NLA_U8 },
+ 	[TCA_FLOWER_KEY_ENC_OPT_GTP_QFI]	   = { .type = NLA_U8 },
++	[TCA_FLOWER_KEY_ENC_OPT_GTP_TEID]	   = { .type = NLA_U32 },
+ };
+ 
+ static const struct nla_policy
+@@ -1452,10 +1453,11 @@ static int fl_set_gtp_opt(const struct nlattr *nla, struct fl_flow_key *key,
+ 		return err;
+ 
+ 	if (!option_len &&
+-	    (!tb[TCA_FLOWER_KEY_ENC_OPT_GTP_PDU_TYPE] ||
+-	     !tb[TCA_FLOWER_KEY_ENC_OPT_GTP_QFI])) {
++	    !tb[TCA_FLOWER_KEY_ENC_OPT_GTP_PDU_TYPE] &&
++	    !tb[TCA_FLOWER_KEY_ENC_OPT_GTP_QFI] &&
++	    !tb[TCA_FLOWER_KEY_ENC_OPT_GTP_TEID]) {
+ 		NL_SET_ERR_MSG_MOD(extack,
+-				   "Missing tunnel key gtp option pdu type or qfi");
++				   "Missing gtp option: need pdu_type or qfi or teid");
+ 		return -EINVAL;
+ 	}
+ 
+@@ -1466,6 +1468,9 @@ static int fl_set_gtp_opt(const struct nlattr *nla, struct fl_flow_key *key,
+ 	if (tb[TCA_FLOWER_KEY_ENC_OPT_GTP_QFI])
+ 		sinfo->qfi = nla_get_u8(tb[TCA_FLOWER_KEY_ENC_OPT_GTP_QFI]);
+ 
++	if (tb[TCA_FLOWER_KEY_ENC_OPT_GTP_TEID])
++		sinfo->teid = nla_get_be32(tb[TCA_FLOWER_KEY_ENC_OPT_GTP_TEID]);
++
+ 	return sizeof(*sinfo);
+ }
+ 
+@@ -3268,6 +3273,10 @@ static int fl_dump_key_gtp_opt(struct sk_buff *skb,
+ 	if (nla_put_u8(skb, TCA_FLOWER_KEY_ENC_OPT_GTP_QFI, session_info->qfi))
+ 		goto nla_put_failure;
+ 
++	if (nla_put_be32(skb, TCA_FLOWER_KEY_ENC_OPT_GTP_TEID,
++			 session_info->teid))
++		goto nla_put_failure;
++
+ 	nla_nest_end(skb, nest);
+ 	return 0;
+ 
+-- 
+2.47.3
+

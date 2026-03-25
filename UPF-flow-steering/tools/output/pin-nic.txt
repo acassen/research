@@ -1,0 +1,34 @@
+lspci | grep Mellanox
+31:00.0 Ethernet controller: Mellanox Technologies MT2910 Family [ConnectX-7]
+31:00.1 Ethernet controller: Mellanox Technologies MT2910 Family [ConnectX-7]
+b1:00.0 Ethernet controller: Mellanox Technologies MT2910 Family [ConnectX-7]
+b1:00.1 Ethernet controller: Mellanox Technologies MT2910 Family [ConnectX-7]
+
+./pin-mlx-irqs.sh 0000:31:00.0 0-7
+PCI device: 0000:31:00.0
+CPU list: 0 1 2 3 4 5 6 7
+Assign IRQ 176 → CPU 0
+Assign IRQ 177 → CPU 1
+Assign IRQ 200 → CPU 2
+Assign IRQ 201 → CPU 3
+Assign IRQ 202 → CPU 4
+Assign IRQ 203 → CPU 5
+Assign IRQ 204 → CPU 6
+Assign IRQ 205 → CPU 7
+Assign IRQ 206 → CPU 0
+Assign IRQ 207 → CPU 1
+Assign IRQ 208 → CPU 2
+Assign IRQ 209 → CPU 3
+Assign IRQ 210 → CPU 4
+Assign IRQ 211 → CPU 5
+Assign IRQ 212 → CPU 6
+Assign IRQ 213 → CPU 7
+Assign IRQ 214 → CPU 0
+Assign IRQ 215 → CPU 1
+Assign IRQ 216 → CPU 2
+Assign IRQ 217 → CPU 3
+Assign IRQ 218 → CPU 4
+Assign IRQ 219 → CPU 5
+Assign IRQ 220 → CPU 6
+
+

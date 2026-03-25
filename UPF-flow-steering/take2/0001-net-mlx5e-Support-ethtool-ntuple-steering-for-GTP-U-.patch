@@ -1,0 +1,235 @@
+From 8315a4942b23f425282f53b1a0eade896f38fcf4 Mon Sep 17 00:00:00 2001
+From: Alexandre Cassen <acassen@corp.free.fr>
+Date: Wed, 25 Mar 2026 08:53:26 +0100
+Subject: [PATCH] net/mlx5e: Support ethtool ntuple steering for GTP-U TEID
+ ranges
+
+Extend the ethtool ntuple path (-N/-U) with GTPU_V4_FLOW/GTPU_V6_FLOW
+flow types, a new struct ethtool_gtpu_spec in the kernel UAPI
+(include/uapi/linux/ethtool.h) and wire it through en_fs_ethtool.c
+to fte_match_set_misc3.gtpu_teid.
+
+Extend the ethtool ntuple filter path to support GTPU_V4_FLOW and
+GTPU_V6_FLOW with an optional TEID match:
+
+  ethtool -N <dev> flow-type gtpu4 teid <val> m <mask> action <queue>
+
+Add a new struct ethtool_gtpu_spec in the ethtool kernel UAPI.
+
+Add parse_gtpu() to fill outer_headers criteria with ethertype,
+IPPROTO_UDP and udp_dport=GTP1U_PORT; sets misc_parameters_3
+gtpu_teid criteria/value when a TEID mask is present.
+
+Extend match_criteria_enable to set MLX5_MATCH_MISC_PARAMETERS_3
+when misc_parameters_3 is non-zero.
+
+Add validate_gtpu() to check MLX5_FLEX_PARSER_GTPU_TEID_ENABLED
+firmware capability and returns the tuple count for flow table
+priority selection.
+
+Handle GTPU_V4/V6_FLOW in get_flow_table(), validate_flow(), and
+flow_type_to_traffic_type() (RSS not supported for GTP-U).
+
+Signed-off-by: Alexandre Cassen <acassen@corp.free.fr>
+---
+ .../mellanox/mlx5/core/en_fs_ethtool.c        | 75 ++++++++++++++++++-
+ include/uapi/linux/ethtool.h                  | 20 ++++-
+ 2 files changed, 92 insertions(+), 3 deletions(-)
+
+diff --git a/drivers/net/ethernet/mellanox/mlx5/core/en_fs_ethtool.c b/drivers/net/ethernet/mellanox/mlx5/core/en_fs_ethtool.c
+index aecfba7deeb0..136a54b9b9b0 100644
+--- a/drivers/net/ethernet/mellanox/mlx5/core/en_fs_ethtool.c
++++ b/drivers/net/ethernet/mellanox/mlx5/core/en_fs_ethtool.c
+@@ -31,6 +31,7 @@
+  */
+ 
+ #include <linux/mlx5/fs.h>
++#include <net/gtp.h>
+ #include "en.h"
+ #include "en/params.h"
+ #include "en/xsk/pool.h"
+@@ -98,6 +99,8 @@ static struct mlx5e_ethtool_table *get_flow_table(struct mlx5e_priv *priv,
+ 	case UDP_V6_FLOW:
+ 	case IP_USER_FLOW:
+ 	case IPV6_USER_FLOW:
++	case GTPU_V4_FLOW:
++	case GTPU_V6_FLOW:
+ 		max_tuples = ETHTOOL_NUM_L3_L4_FTS;
+ 		prio = MLX5E_ETHTOOL_L3_L4_PRIO + (max_tuples - num_tuples);
+ 		eth_ft = &ethtool->l3_l4_ft[prio];
+@@ -311,6 +314,26 @@ parse_udp6(void *headers_c, void *headers_v, struct ethtool_rx_flow_spec *fs)
+ 		l4_mask->pdst, l4_val->pdst);
+ }
+ 
++static void
++parse_gtpu(void *headers_c, void *headers_v, void *misc3_c, void *misc3_v,
++	   u16 ethertype, struct ethtool_rx_flow_spec *fs)
++{
++	struct ethtool_gtpu_spec *m = &fs->m_u.gtpu_spec;
++	struct ethtool_gtpu_spec *v = &fs->h_u.gtpu_spec;
++
++	MLX5E_FTE_SET(headers_c, ethertype,   0xffff);
++	MLX5E_FTE_SET(headers_v, ethertype,   ethertype);
++	MLX5E_FTE_SET(headers_c, ip_protocol, 0xff);
++	MLX5E_FTE_SET(headers_v, ip_protocol, IPPROTO_UDP);
++	MLX5E_FTE_SET(headers_c, udp_dport,   0xffff);
++	MLX5E_FTE_SET(headers_v, udp_dport,   GTP1U_PORT);
++
++	if (m->teid) {
++		MLX5_SET(fte_match_set_misc3, misc3_c, gtpu_teid, be32_to_cpu(m->teid));
++		MLX5_SET(fte_match_set_misc3, misc3_v, gtpu_teid, be32_to_cpu(v->teid));
++	}
++}
++
+ static void
+ parse_ether(void *headers_c, void *headers_v, struct ethtool_rx_flow_spec *fs)
+ {
+@@ -350,6 +373,10 @@ static int set_flow_attrs(u32 *match_c, u32 *match_v,
+ 					     outer_headers);
+ 	void *outer_headers_v = MLX5_ADDR_OF(fte_match_param, match_v,
+ 					     outer_headers);
++	void *misc3_c = MLX5_ADDR_OF(fte_match_param, match_c,
++				     misc_parameters_3);
++	void *misc3_v = MLX5_ADDR_OF(fte_match_param, match_v,
++				     misc_parameters_3);
+ 	u32 flow_type = flow_type_mask(fs->flow_type);
+ 
+ 	switch (flow_type) {
+@@ -374,6 +401,14 @@ static int set_flow_attrs(u32 *match_c, u32 *match_v,
+ 	case ETHER_FLOW:
+ 		parse_ether(outer_headers_c, outer_headers_v, fs);
+ 		break;
++	case GTPU_V4_FLOW:
++		parse_gtpu(outer_headers_c, outer_headers_v, misc3_c,
++			   misc3_v, ETH_P_IP, fs);
++		break;
++	case GTPU_V6_FLOW:
++		parse_gtpu(outer_headers_c, outer_headers_v, misc3_c,
++			   misc3_v, ETH_P_IPV6, fs);
++		break;
+ 	default:
+ 		return -EINVAL;
+ 	}
+@@ -419,6 +454,15 @@ static bool outer_header_zero(u32 *match_criteria)
+ 						  size - 1);
+ }
+ 
++static bool misc3_zero(u32 *match_criteria)
++{
++	int size = MLX5_FLD_SZ_BYTES(fte_match_param, misc_parameters_3);
++	char *misc3_c = MLX5_ADDR_OF(fte_match_param, match_criteria,
++				     misc_parameters_3);
++
++	return misc3_c[0] == 0 && !memcmp(misc3_c, misc3_c + 1, size - 1);
++}
++
+ static int flow_get_tirn(struct mlx5e_priv *priv,
+ 			 struct mlx5e_ethtool_rule *eth_rule,
+ 			 struct ethtool_rx_flow_spec *fs,
+@@ -490,7 +534,11 @@ add_ethtool_flow_rule(struct mlx5e_priv *priv,
+ 		flow_act.action = MLX5_FLOW_CONTEXT_ACTION_FWD_DEST;
+ 	}
+ 
+-	spec->match_criteria_enable = (!outer_header_zero(spec->match_criteria));
++	spec->match_criteria_enable = 0;
++	if (!outer_header_zero(spec->match_criteria))
++		spec->match_criteria_enable |= MLX5_MATCH_OUTER_HEADERS;
++	if (!misc3_zero(spec->match_criteria))
++		spec->match_criteria_enable |= MLX5_MATCH_MISC_PARAMETERS_3;
+ 	spec->flow_context.flow_tag = MLX5_FS_DEFAULT_FLOW_TAG;
+ 	rule = mlx5_add_flow_rules(ft, spec, &flow_act, dst, dst ? 1 : 0);
+ 	if (IS_ERR(rule)) {
+@@ -647,6 +695,21 @@ static int validate_tcpudp6(struct ethtool_rx_flow_spec *fs)
+ 	return ++ntuples;
+ }
+ 
++static int validate_gtpu(struct mlx5e_priv *priv,
++			 struct ethtool_rx_flow_spec *fs)
++{
++	struct ethtool_gtpu_spec *m = &fs->m_u.gtpu_spec;
++	int ntuples = 2; /* outer IP version + UDP:GTP1U_PORT always matched */
++
++	if (!(MLX5_CAP_GEN(priv->mdev, flex_parser_protocols) &
++	      MLX5_FLEX_PARSER_GTPU_TEID_ENABLED))
++		return -EOPNOTSUPP;
++
++	if (m->teid)
++		ntuples++;
++	return ntuples;
++}
++
+ static int validate_vlan(struct ethtool_rx_flow_spec *fs)
+ {
+ 	if (fs->m_ext.vlan_etype ||
+@@ -703,6 +766,13 @@ static int validate_flow(struct mlx5e_priv *priv,
+ 			return ret;
+ 		num_tuples += ret;
+ 		break;
++	case GTPU_V4_FLOW:
++	case GTPU_V6_FLOW:
++		ret = validate_gtpu(priv, fs);
++		if (ret < 0)
++			return ret;
++		num_tuples += ret;
++		break;
+ 	default:
+ 		return -EOPNOTSUPP;
+ 	}
+@@ -883,6 +953,9 @@ static int flow_type_to_traffic_type(u32 flow_type)
+ 		return MLX5_TT_IPV4_IPSEC_ESP;
+ 	case ESP_V6_FLOW:
+ 		return MLX5_TT_IPV6_IPSEC_ESP;
++	case GTPU_V4_FLOW:
++	case GTPU_V6_FLOW:
++		return -EINVAL;
+ 	case IPV4_FLOW:
+ 	case IP_USER_FLOW:
+ 		return MLX5_TT_IPV4;
+diff --git a/include/uapi/linux/ethtool.h b/include/uapi/linux/ethtool.h
+index b74b80508553..7dd3db993959 100644
+--- a/include/uapi/linux/ethtool.h
++++ b/include/uapi/linux/ethtool.h
+@@ -1348,6 +1348,21 @@ struct ethtool_usrip6_spec {
+ 	__u8    l4_proto;
+ };
+ 
++/**
++ * struct ethtool_gtpu_spec - flow specification for GTP-U
++ * @teid: GTP-U Tunnel Endpoint Identifier (network byte order)
++ * @padding: reserved, must be zero
++ *
++ * Used with %GTPU_V4_FLOW and %GTPU_V6_FLOW.  The outer IP version
++ * and UDP destination port (2152) are implied by the flow type; only
++ * the TEID needs to be supplied here.  Mask the TEID via the
++ * corresponding @m_u.gtpu_spec.teid field to match a contiguous range.
++ */
++struct ethtool_gtpu_spec {
++	__be32	teid;
++	__u8	padding[4];
++};
++
+ union ethtool_flow_union {
+ 	struct ethtool_tcpip4_spec		tcp_ip4_spec;
+ 	struct ethtool_tcpip4_spec		udp_ip4_spec;
+@@ -1361,6 +1376,7 @@ union ethtool_flow_union {
+ 	struct ethtool_ah_espip6_spec		ah_ip6_spec;
+ 	struct ethtool_ah_espip6_spec		esp_ip6_spec;
+ 	struct ethtool_usrip6_spec		usr_ip6_spec;
++	struct ethtool_gtpu_spec		gtpu_spec;
+ 	struct ethhdr				ether_spec;
+ 	__u8					hdata[52];
+ };
+@@ -2340,8 +2356,8 @@ enum {
+ 	 * elements such as TEID and GTP version.
+ 	 * It is primarily intended for data communication of the UE.
+ 	 */
+-	GTPU_V4_FLOW	= 0x13,	/* hash only */
+-	GTPU_V6_FLOW	= 0x14,	/* hash only */
++	GTPU_V4_FLOW	= 0x13,	/* hash or spec (gtpu_spec) */
++	GTPU_V6_FLOW	= 0x14,	/* hash or spec (gtpu_spec) */
+ 
+ 	/* Use for GTP-C IPv4 and v6.
+ 	 * The format of these GTP packets does not include TEID.
+-- 
+2.47.3
+

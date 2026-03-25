@@ -1,0 +1,118 @@
+From 06ae1dacaa74a6cee45d3ed4ab01db1f97cad9a3 Mon Sep 17 00:00:00 2001
+From: Alexandre Cassen <acassen@corp.free.fr>
+Date: Wed, 25 Mar 2026 09:46:09 +0100
+Subject: [PATCH] flower: Support GTP TEID in gtp_opts
+
+Add TCA_FLOWER_KEY_ENC_OPT_GTP_TEID attribute to allow matching on the
+GTP Tunnel Endpoint Identifier in flower filters.
+
+The gtp_opts format is extended from "pdu_type:qfi" to
+"pdu_type:qfi:teid" (hex). A bare hex value prefixed with "0x" is also
+accepted as a shorthand for specifying the TEID alone. Update the
+default mask from "ff:ff" to "ff:ff:ffffffff" accordingly.
+
+Signed-off-by: Alexandre Cassen <acassen@corp.free.fr>
+---
+ include/uapi/linux/pkt_cls.h |  3 ++-
+ tc/f_flower.c                | 34 +++++++++++++++++++++++++++++++---
+ 2 files changed, 33 insertions(+), 4 deletions(-)
+
+diff --git a/include/uapi/linux/pkt_cls.h b/include/uapi/linux/pkt_cls.h
+index 3c24e8e2..d404c5a0 100644
+--- a/include/uapi/linux/pkt_cls.h
++++ b/include/uapi/linux/pkt_cls.h
+@@ -639,6 +639,7 @@ enum {
+ 	TCA_FLOWER_KEY_ENC_OPT_GTP_UNSPEC,
+ 	TCA_FLOWER_KEY_ENC_OPT_GTP_PDU_TYPE,		/* u8 */
+ 	TCA_FLOWER_KEY_ENC_OPT_GTP_QFI,			/* u8 */
++	TCA_FLOWER_KEY_ENC_OPT_GTP_TEID,		/* be32 */
+ 
+ 	__TCA_FLOWER_KEY_ENC_OPT_GTP_MAX,
+ };
+@@ -742,7 +743,7 @@ struct tcf_ematch_hdr {
+ };
+ 
+ /*  0                   1
+- *  0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 
++ *  0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5
+  * +-----------------------+-+-+---+
+  * |         Unused        |S|I| R |
+  * +-----------------------+-+-+---+
+diff --git a/tc/f_flower.c b/tc/f_flower.c
+index 6fc2c6a1..2c49dcf6 100644
+--- a/tc/f_flower.c
++++ b/tc/f_flower.c
+@@ -1126,8 +1126,21 @@ static int flower_parse_gtp_opt(char *str, struct nlmsghdr *n)
+ 
+ 	nest = addattr_nest(n, MAX_MSG, TCA_FLOWER_KEY_ENC_OPTS_GTP | NLA_F_NESTED);
+ 
++	if (strncasecmp(str, "0x", 2) == 0) {
++		__be32 teid;
++
++		err = get_be32(&teid, str, 16);
++		if (err)
++			return err;
++		addattr32(n, MAX_MSG, TCA_FLOWER_KEY_ENC_OPT_GTP_TEID, teid);
++		addattr_nest_end(n, nest);
++		return 0;
++	}
++
+ 	token = strsep(&str, ":");
+ 	for (arg = 1; arg <= TCA_FLOWER_KEY_ENC_OPT_GTP_MAX; arg++) {
++		if (!token)
++			break;
+ 		switch (arg) {
+ 		case TCA_FLOWER_KEY_ENC_OPT_GTP_PDU_TYPE:
+ 		{
+@@ -1153,6 +1166,18 @@ static int flower_parse_gtp_opt(char *str, struct nlmsghdr *n)
+ 			addattr8(n, MAX_MSG, arg, qfi);
+ 			break;
+ 		}
++		case TCA_FLOWER_KEY_ENC_OPT_GTP_TEID:
++		{
++			__be32 teid;
++
++			if (!strlen(token))
++				break;
++			err = get_be32(&teid, token, 16);
++			if (err)
++				return err;
++			addattr32(n, MAX_MSG, arg, teid);
++			break;
++		}
+ 		default:
+ 			fprintf(stderr, "Unknown \"gtp_opts\" type\n");
+ 			return -1;
+@@ -1412,8 +1437,9 @@ static int flower_parse_enc_opts_gtp(char *str, struct nlmsghdr *n)
+ 		if (strlen(slash) > FLOWER_OPTS_MAX)
+ 			return -1;
+ 		strcpy(mask, slash);
+-	} else
+-		strcpy(mask, "ff:ff");
++	} else {
++		strcpy(mask, "ff:ff:ffffffff");
++	}
+ 
+ 	if (strlen(str) > FLOWER_OPTS_MAX)
+ 		return -1;
+@@ -2769,14 +2795,16 @@ static void flower_print_gtp_opts(const char *name, struct rtattr *attr,
+ {
+ 	struct rtattr *tb[TCA_FLOWER_KEY_ENC_OPT_GTP_MAX + 1];
+ 	__u8 pdu_type, qfi;
++	__u32 teid;
+ 
+ 	parse_rtattr(tb, TCA_FLOWER_KEY_ENC_OPT_GTP_MAX, RTA_DATA(attr),
+ 		     RTA_PAYLOAD(attr));
+ 
+ 	pdu_type = rta_getattr_u8(tb[TCA_FLOWER_KEY_ENC_OPT_GTP_PDU_TYPE]);
+ 	qfi = rta_getattr_u8(tb[TCA_FLOWER_KEY_ENC_OPT_GTP_QFI]);
++	teid = rta_getattr_be32(tb[TCA_FLOWER_KEY_ENC_OPT_GTP_TEID]);
+ 
+-	snprintf(strbuf, len, "%02x:%02x", pdu_type, qfi);
++	snprintf(strbuf, len, "%02x:%02x:0x%08x", pdu_type, qfi, teid);
+ }
+ 
+ static void flower_print_pfcp_opts(const char *name, struct rtattr *attr,
+-- 
+2.47.3
+

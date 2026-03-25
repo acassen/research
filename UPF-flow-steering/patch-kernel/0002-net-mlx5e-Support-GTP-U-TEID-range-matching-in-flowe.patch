@@ -1,0 +1,104 @@
+From 273bbf0941c05b65211cf02085d1a6fe5bc8d3e1 Mon Sep 17 00:00:00 2001
+From: Alexandre Cassen <acassen@corp.free.fr>
+Date: Wed, 25 Mar 2026 11:10:04 +0100
+Subject: [PATCH 2/2] net/mlx5e: Support GTP-U TEID range matching in flower
+ via enc_key_id
+
+In NIC mode, when a flower rule carries TCA_FLOWER_KEY_ENC_KEY_ID,
+map it to the GTP-U TEID field via the flex parser.
+
+TEID is a mandatory outer GTP-U header field, extend existing
+enc_key_id flower key (FLOW_DISSECTOR_KEY_ENC_KEYID) handling
+to support mask. Userspace set the TEID with:
+
+  tc filter add dev <dev> ingress protocol ip flower skip_sw \
+      enc_dst_port 2152 enc_key_id <teid>/<mask>             \
+      action skbedit queue_mapping <q> skip_sw
+
+The mask allows range-based steering to support traffic
+partitioning.
+
+Signed-off-by: Alexandre Cassen <acassen@corp.free.fr>
+---
+ .../net/ethernet/mellanox/mlx5/core/en_tc.c   | 20 +++++++++++++++++++
+ include/uapi/linux/pkt_cls.h                  |  2 ++
+ net/sched/cls_flower.c                        |  5 +++--
+ 3 files changed, 25 insertions(+), 2 deletions(-)
+
+diff --git a/drivers/net/ethernet/mellanox/mlx5/core/en_tc.c b/drivers/net/ethernet/mellanox/mlx5/core/en_tc.c
+index 8838ea2f0f31..36dce79b37d8 100644
+--- a/drivers/net/ethernet/mellanox/mlx5/core/en_tc.c
++++ b/drivers/net/ethernet/mellanox/mlx5/core/en_tc.c
+@@ -3152,6 +3152,26 @@ static int __parse_cls_flower(struct mlx5e_priv *priv,
+ 		return -EOPNOTSUPP;
+ 	}
+ 
++	if (!mlx5e_is_eswitch_flow(flow) &&
++	    flow_rule_match_key(rule, FLOW_DISSECTOR_KEY_ENC_KEYID)) {
++		struct flow_match_enc_keyid enc_keyid;
++
++		flow_rule_match_enc_keyid(rule, &enc_keyid);
++		if (enc_keyid.mask->keyid) {
++			if (!(MLX5_CAP_GEN(priv->mdev, flex_parser_protocols) &
++			      MLX5_FLEX_PARSER_GTPU_TEID_ENABLED)) {
++				NL_SET_ERR_MSG_MOD(extack,
++						   "GTP-U TEID matching not supported");
++				return -EOPNOTSUPP;
++			}
++			MLX5_SET(fte_match_set_misc3, misc_c_3, gtpu_teid,
++				 be32_to_cpu(enc_keyid.mask->keyid));
++			MLX5_SET(fte_match_set_misc3, misc_v_3, gtpu_teid,
++				 be32_to_cpu(enc_keyid.key->keyid));
++			spec->match_criteria_enable |= MLX5_MATCH_MISC_PARAMETERS_3;
++		}
++	}
++
+ 	return 0;
+ }
+ 
+diff --git a/include/uapi/linux/pkt_cls.h b/include/uapi/linux/pkt_cls.h
+index 28d94b11d1aa..fcaf06c6892d 100644
+--- a/include/uapi/linux/pkt_cls.h
++++ b/include/uapi/linux/pkt_cls.h
+@@ -560,6 +560,8 @@ enum {
+ 	TCA_FLOWER_KEY_ENC_FLAGS,	/* be32 */
+ 	TCA_FLOWER_KEY_ENC_FLAGS_MASK,	/* be32 */
+ 
++	TCA_FLOWER_KEY_ENC_KEY_ID_MASK,	/* be32 */
++
+ 	__TCA_FLOWER_MAX,
+ };
+ 
+diff --git a/net/sched/cls_flower.c b/net/sched/cls_flower.c
+index 26070c892305..ccfcfa4d27a7 100644
+--- a/net/sched/cls_flower.c
++++ b/net/sched/cls_flower.c
+@@ -659,6 +659,7 @@ static const struct nla_policy fl_policy[TCA_FLOWER_MAX + 1] = {
+ 	[TCA_FLOWER_KEY_VLAN_PRIO]	= { .type = NLA_U8 },
+ 	[TCA_FLOWER_KEY_VLAN_ETH_TYPE]	= { .type = NLA_U16 },
+ 	[TCA_FLOWER_KEY_ENC_KEY_ID]	= { .type = NLA_U32 },
++	[TCA_FLOWER_KEY_ENC_KEY_ID_MASK] = { .type = NLA_U32 },
+ 	[TCA_FLOWER_KEY_ENC_IPV4_SRC]	= { .type = NLA_U32 },
+ 	[TCA_FLOWER_KEY_ENC_IPV4_SRC_MASK] = { .type = NLA_U32 },
+ 	[TCA_FLOWER_KEY_ENC_IPV4_DST]	= { .type = NLA_U32 },
+@@ -2074,7 +2075,7 @@ static int fl_set_key(struct net *net, struct nlattr *tca_opts,
+ 	}
+ 
+ 	fl_set_key_val(tb, &key->enc_key_id.keyid, TCA_FLOWER_KEY_ENC_KEY_ID,
+-		       &mask->enc_key_id.keyid, TCA_FLOWER_UNSPEC,
++		       &mask->enc_key_id.keyid, TCA_FLOWER_KEY_ENC_KEY_ID_MASK,
+ 		       sizeof(key->enc_key_id.keyid));
+ 
+ 	fl_set_key_val(tb, &key->enc_tp.src, TCA_FLOWER_KEY_ENC_UDP_SRC_PORT,
+@@ -3644,7 +3645,7 @@ static int fl_dump_key(struct sk_buff *skb, struct net *net,
+ 		goto nla_put_failure;
+ 
+ 	if (fl_dump_key_val(skb, &key->enc_key_id, TCA_FLOWER_KEY_ENC_KEY_ID,
+-			    &mask->enc_key_id, TCA_FLOWER_UNSPEC,
++			    &mask->enc_key_id, TCA_FLOWER_KEY_ENC_KEY_ID_MASK,
+ 			    sizeof(key->enc_key_id)) ||
+ 	    fl_dump_key_val(skb, &key->enc_tp.src,
+ 			    TCA_FLOWER_KEY_ENC_UDP_SRC_PORT,
+-- 
+2.47.3
+
