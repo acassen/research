@@ -14,19 +14,19 @@
 
 ./teid-split 8 | while read qname teid; do
 #	./tc filter add dev p0 ingress protocol ip flower skip_sw	\
-#			enc_dst_port 2152 enc_key_id ${teid}		\
+#			ip_proto udp dst_port 2152 enc_key_id ${teid}	\
 #			action skbedit queue_mapping $q skip_sw
 
 	# over IPv4
 	./tc filter add dev p0 ingress protocol 802.1q flower skip_sw	\
 			vlan_id 522 vlan_ethtype ip			\
-			enc_dst_port 2152 enc_key_id ${teid}		\
+			ip_proto udp dst_port 2152 enc_key_id ${teid}	\
 			action skbedit queue_mapping ${qname#q} skip_sw
 
 	# over IPv6
 	./tc filter add dev p0 ingress protocol 802.1q flower skip_sw	\
 			vlan_id 522 vlan_ethtype ipv6			\
-			enc_dst_port 2152 enc_key_id ${teid}		\
+			ip_proto udp dst_port 2152 enc_key_id ${teid}	\
 			action skbedit queue_mapping ${qname#q} skip_sw
 done
 
