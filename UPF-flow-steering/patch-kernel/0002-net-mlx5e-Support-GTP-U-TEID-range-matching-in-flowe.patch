@@ -1,4 +1,4 @@
-From 273bbf0941c05b65211cf02085d1a6fe5bc8d3e1 Mon Sep 17 00:00:00 2001
+From 08464b44a3ded8a3d0967841431dd72bc65538a3 Mon Sep 17 00:00:00 2001
 From: Alexandre Cassen <acassen@corp.free.fr>
 Date: Wed, 25 Mar 2026 11:10:04 +0100
 Subject: [PATCH 2/2] net/mlx5e: Support GTP-U TEID range matching in flower
@@ -26,10 +26,10 @@ Signed-off-by: Alexandre Cassen <acassen@corp.free.fr>
  3 files changed, 25 insertions(+), 2 deletions(-)
 
 diff --git a/drivers/net/ethernet/mellanox/mlx5/core/en_tc.c b/drivers/net/ethernet/mellanox/mlx5/core/en_tc.c
-index 8838ea2f0f31..36dce79b37d8 100644
+index b39b108f00a2..40b295842906 100644
 --- a/drivers/net/ethernet/mellanox/mlx5/core/en_tc.c
 +++ b/drivers/net/ethernet/mellanox/mlx5/core/en_tc.c
-@@ -3152,6 +3152,26 @@ static int __parse_cls_flower(struct mlx5e_priv *priv,
+@@ -3141,6 +3141,26 @@ static int __parse_cls_flower(struct mlx5e_priv *priv,
  		return -EOPNOTSUPP;
  	}
  
@@ -70,10 +70,10 @@ index 28d94b11d1aa..fcaf06c6892d 100644
  };
  
 diff --git a/net/sched/cls_flower.c b/net/sched/cls_flower.c
-index 26070c892305..ccfcfa4d27a7 100644
+index 0c4beff18d68..b97e6db4b5ce 100644
 --- a/net/sched/cls_flower.c
 +++ b/net/sched/cls_flower.c
-@@ -659,6 +659,7 @@ static const struct nla_policy fl_policy[TCA_FLOWER_MAX + 1] = {
+@@ -655,6 +655,7 @@ static const struct nla_policy fl_policy[TCA_FLOWER_MAX + 1] = {
  	[TCA_FLOWER_KEY_VLAN_PRIO]	= { .type = NLA_U8 },
  	[TCA_FLOWER_KEY_VLAN_ETH_TYPE]	= { .type = NLA_U16 },
  	[TCA_FLOWER_KEY_ENC_KEY_ID]	= { .type = NLA_U32 },
@@ -81,7 +81,7 @@ index 26070c892305..ccfcfa4d27a7 100644
  	[TCA_FLOWER_KEY_ENC_IPV4_SRC]	= { .type = NLA_U32 },
  	[TCA_FLOWER_KEY_ENC_IPV4_SRC_MASK] = { .type = NLA_U32 },
  	[TCA_FLOWER_KEY_ENC_IPV4_DST]	= { .type = NLA_U32 },
-@@ -2074,7 +2075,7 @@ static int fl_set_key(struct net *net, struct nlattr *tca_opts,
+@@ -2104,7 +2105,7 @@ static int fl_set_key(struct net *net, struct nlattr *tca_opts,
  	}
  
  	fl_set_key_val(tb, &key->enc_key_id.keyid, TCA_FLOWER_KEY_ENC_KEY_ID,
@@ -90,7 +90,7 @@ index 26070c892305..ccfcfa4d27a7 100644
  		       sizeof(key->enc_key_id.keyid));
  
  	fl_set_key_val(tb, &key->enc_tp.src, TCA_FLOWER_KEY_ENC_UDP_SRC_PORT,
-@@ -3644,7 +3645,7 @@ static int fl_dump_key(struct sk_buff *skb, struct net *net,
+@@ -3674,7 +3675,7 @@ static int fl_dump_key(struct sk_buff *skb, struct net *net,
  		goto nla_put_failure;
  
  	if (fl_dump_key_val(skb, &key->enc_key_id, TCA_FLOWER_KEY_ENC_KEY_ID,

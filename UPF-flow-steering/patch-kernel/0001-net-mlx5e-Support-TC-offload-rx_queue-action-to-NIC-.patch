@@ -1,4 +1,4 @@
-From 0e0f98f56e91ff273d852bdb0c0b3826612b29c2 Mon Sep 17 00:00:00 2001
+From 6608d9c67cfce0bcc0ff3c0feda32899b1d58907 Mon Sep 17 00:00:00 2001
 From: Alexandre Cassen <acassen@corp.free.fr>
 Date: Wed, 25 Mar 2026 10:29:56 +0100
 Subject: [PATCH 1/2] net/mlx5e: Support TC offload rx_queue action to NIC flow
@@ -20,10 +20,10 @@ Signed-off-by: Alexandre Cassen <acassen@corp.free.fr>
  create mode 100644 drivers/net/ethernet/mellanox/mlx5/core/en/tc/act/rx_queue.c
 
 diff --git a/drivers/net/ethernet/mellanox/mlx5/core/Makefile b/drivers/net/ethernet/mellanox/mlx5/core/Makefile
-index 8ffa286a18f5..f34f0ac8f29f 100644
+index 19e50f0d55af..9ee4d5c2d557 100644
 --- a/drivers/net/ethernet/mellanox/mlx5/core/Makefile
 +++ b/drivers/net/ethernet/mellanox/mlx5/core/Makefile
-@@ -55,7 +55,8 @@ mlx5_core-$(CONFIG_MLX5_CLS_ACT)     += en/tc/act/act.o en/tc/act/drop.o en/tc/a
+@@ -56,7 +56,8 @@ mlx5_core-$(CONFIG_MLX5_CLS_ACT)     += en/tc/act/act.o en/tc/act/drop.o en/tc/a
  					en/tc/act/vlan.o en/tc/act/vlan_mangle.o en/tc/act/mpls.o \
  					en/tc/act/mirred.o en/tc/act/mirred_nic.o \
  					en/tc/act/ct.o en/tc/act/sample.o en/tc/act/ptype.o \
@@ -107,10 +107,10 @@ index 000000000000..83add2141080
 +	.is_terminating_action	= true,
 +};
 diff --git a/drivers/net/ethernet/mellanox/mlx5/core/en_tc.c b/drivers/net/ethernet/mellanox/mlx5/core/en_tc.c
-index 1434b65d4746..8838ea2f0f31 100644
+index c99e824b4c6d..b39b108f00a2 100644
 --- a/drivers/net/ethernet/mellanox/mlx5/core/en_tc.c
 +++ b/drivers/net/ethernet/mellanox/mlx5/core/en_tc.c
-@@ -1266,6 +1266,10 @@ mlx5e_add_offloaded_nic_rule(struct mlx5e_priv *priv,
+@@ -1267,6 +1267,10 @@ mlx5e_add_offloaded_nic_rule(struct mlx5e_priv *priv,
  		dest[dest_ix].type = MLX5_FLOW_DESTINATION_TYPE_TIR;
  		dest[dest_ix].tir_num = nic_attr->hairpin_tirn;
  		dest_ix++;
@@ -122,17 +122,17 @@ index 1434b65d4746..8838ea2f0f31 100644
  		dest[dest_ix].type = MLX5_FLOW_DESTINATION_TYPE_FLOW_TABLE;
  		if (attr->dest_chain) {
 diff --git a/drivers/net/ethernet/mellanox/mlx5/core/en_tc.h b/drivers/net/ethernet/mellanox/mlx5/core/en_tc.h
-index e1b8cb78369f..254ea76fcbe9 100644
+index e1b8cb78369f..6a7bc87c7d75 100644
 --- a/drivers/net/ethernet/mellanox/mlx5/core/en_tc.h
 +++ b/drivers/net/ethernet/mellanox/mlx5/core/en_tc.h
-@@ -66,6 +66,7 @@ struct mlx5e_tc_update_priv {
- struct mlx5_nic_flow_attr {
- 	u32 flow_tag;
- 	u32 hairpin_tirn;
-+	u32 rx_tirn;
- 	struct mlx5_flow_table *hairpin_ft;
+@@ -64,6 +64,7 @@ struct mlx5e_tc_update_priv {
  };
  
+ struct mlx5_nic_flow_attr {
++	u32 rx_tirn;
+ 	u32 flow_tag;
+ 	u32 hairpin_tirn;
+ 	struct mlx5_flow_table *hairpin_ft;
 -- 
 2.47.3
 
